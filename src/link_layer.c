@@ -78,16 +78,10 @@ static int llopen_transmitter()
         FLAG
     };
 
-    int attempts = 0;
     STOP = FALSE;
     alarmCount = 0;
 
-    if (setup_alarm_handler() < 0)
-    {
-        return -1;
-    }
-
-    while (attempts < current_retransmissions && !STOP)
+    while (alarmCount < current_retransmissions && !STOP)
     {
         // Send SET frame
         int bytes_written = writeBytesSerialPort(set_frame, 5);
@@ -172,11 +166,9 @@ static int llopen_transmitter()
             alarm(0);
             alarmEnabled = FALSE;
         }
-
-        attempts++;
     }
 
-    if (attempts >= current_retransmissions)
+    if (alarmCount >= current_retransmissions)
     {
         return -1;
     }
@@ -193,15 +185,8 @@ static int llopen_receiver()
     unsigned char byte;
     int valid_set = FALSE;
 
-    if (setup_alarm_handler() < 0)
-    {
-        return -1;
-    }
-    
-    alarm(current_timeout);
-    alarmEnabled = TRUE;
-
-    while (alarmEnabled && !valid_set)
+    // Receiver waits indefinitely for SET frame (no timeout)
+    while (!valid_set)
     {
         int res = readByteSerialPort(&byte);
         if (res < 1)
@@ -246,8 +231,6 @@ static int llopen_receiver()
             {
                 state = STOP_STATE;
                 valid_set = TRUE;
-                alarm(0);
-                alarmEnabled = FALSE;
             }
             else
                 state = START;
@@ -256,11 +239,6 @@ static int llopen_receiver()
         default:
             state = START;
         }
-    }
-
-    if (!valid_set)
-    {
-        return -1;
     }
 
     // Send UA response
@@ -286,7 +264,6 @@ static int llopen_receiver()
 ////////////////////////////////////////////////
 int llopen(LinkLayer connectionParameters)
 {
-
     current_role = connectionParameters.role;
     current_timeout = connectionParameters.timeout;          
     current_retransmissions = connectionParameters.nRetransmissions;
@@ -297,10 +274,17 @@ int llopen(LinkLayer connectionParameters)
         return -1;
     }
 
+
     int result = 0;
     
     if (current_role == LlTx)
     {
+         if (setup_alarm_handler() < 0)
+        {
+            closeSerialPort();
+            return -1;
+        }
+
         result = llopen_transmitter();
     }
     else // LlRx
@@ -341,6 +325,12 @@ int llclose()
     int result = 0;
     
     if (current_role == LlTx) {
+         if (setup_alarm_handler() < 0)
+        {
+            closeSerialPort();
+            return -1;
+        }
+        
         result = llclose_transmitter();
     } else {
         result = llclose_receiver();
@@ -363,10 +353,10 @@ static int llclose_transmitter()
         FLAG
     };
 
-    int attempts = 0;
+    alarmCount = 0;
     STOP = FALSE;
 
-    while (attempts < current_retransmissions && !STOP) {
+    while (alarmCount < current_retransmissions && !STOP) {
         int bytes_written = writeBytesSerialPort(disc_frame, 5);
         if (bytes_written < 5) {
             return -1;
@@ -436,8 +426,6 @@ static int llclose_transmitter()
             alarm(0);
             alarmEnabled = FALSE;
         }
-
-        attempts++;
     }
 
     return -1;
@@ -449,10 +437,8 @@ static int llclose_receiver()
     unsigned char byte;
     int valid_disc = FALSE;
 
-    alarm(current_timeout * 2);  
-    alarmEnabled = TRUE;
-
-    while (alarmEnabled && !valid_disc) {
+    // Receiver waits indefinitely for DISC frame (no timeout)
+    while (!valid_disc) {
         int res = readByteSerialPort(&byte);
         if (res < 1) continue;
 
@@ -479,8 +465,6 @@ static int llclose_receiver()
                 if (byte == FLAG) {
                     state = STOP_STATE;
                     valid_disc = TRUE;
-                    alarm(0);
-                    alarmEnabled = FALSE;
                 } else state = START;
                 break;
             default:
@@ -488,11 +472,6 @@ static int llclose_receiver()
         }
     }
 
-    if (!valid_disc) {
-        return -1;  
-    }
-
-    
     unsigned char disc_response[5] = {
         FLAG,
         A_TRANSMITTER,        
@@ -506,13 +485,10 @@ static int llclose_receiver()
         return -1;
     }
 
-    alarm(current_timeout);
-    alarmEnabled = TRUE;
-    
     state = START;
     int valid_ua = FALSE;
 
-    while (alarmEnabled && !valid_ua) {
+    while (!valid_ua) {
         int res = readByteSerialPort(&byte);
         if (res < 1) continue;
 
@@ -546,5 +522,5 @@ static int llclose_receiver()
         }
     }
 
-    return valid_ua ? 0 : -1;
+    return 0;
 }
