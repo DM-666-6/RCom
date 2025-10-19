@@ -18,6 +18,15 @@
 #define C_SET 0x03
 #define C_UA 0x07
 #define C_DISC 0x0B 
+#define C_RR0 0xAA
+#define C_RR1 0xAB
+#define C_REJ0 0x54
+#define C_REJ1 0x55
+#define C_I0 0x00           
+#define C_I1 0x80           
+#define ESCAPE 0x7D 
+#define Escape_1 0x5E
+#define Escape_2 0x5d
 
 // Global variables
 static volatile int alarmEnabled = FALSE;
@@ -26,6 +35,9 @@ static volatile int STOP = FALSE;
 static LinkLayerRole current_role;
 static int current_timeout;          
 static int current_retransmissions;
+static bool ns = FALSE;  // False for sending 0, otherwise 1
+static volatile bool ack_received = FALSE;
+static volatile int reject_received = FALSE;
 
 // State machine for frame reception
 typedef enum {
@@ -43,6 +55,7 @@ static int llopen_transmitter();
 static int llopen_receiver();
 static int llclose_transmitter();
 static int llclose_receiver();
+static unsigned char calculate_bcc2(const unsigned char *data, int data_size);
 
 // Alarm handler function
 static void alarmHandler(int signal)
@@ -373,7 +386,7 @@ static int llclose_transmitter()
                     break;
                 case FLAG_RCV:
                     if (byte == FLAG) state = FLAG_RCV;
-                    else if (byte == A_TRANSMITTER) state = A_RCV;
+                    else if (byte == A_RECEIVER) state = A_RCV;
                     else state = START;
                     break;
                 case A_RCV:
@@ -383,7 +396,7 @@ static int llclose_transmitter()
                     break;
                 case C_RCV:
                     if (byte == FLAG) state = FLAG_RCV;
-                    else if (byte == (A_TRANSMITTER ^ C_DISC)) state = BCC_OK; 
+                    else if (byte == (A_RECEIVER ^ C_DISC)) state = BCC_OK; 
                     else state = START;
                     break;
                 case BCC_OK:
@@ -468,9 +481,9 @@ static int llclose_receiver()
 
     unsigned char disc_response[5] = {
         FLAG,
-        A_TRANSMITTER,        
+        A_RECEIVER,        
         C_DISC,            
-        A_TRANSMITTER ^ C_DISC, 
+        A_RECEIVER ^ C_DISC, 
         FLAG
     };
 
@@ -517,4 +530,33 @@ static int llclose_receiver()
     }
 
     return 0;
+}
+
+static unsigned char calculate_bcc2(const unsigned char *data, int data_size) {
+    unsigned char bcc2 = 0;
+    
+    for (int i = 0; i < data_size; i++) {
+        bcc2 ^= data[i];
+    }
+    
+    return bcc2;
+}
+
+static int byte_stuffing(const unsigned char *input, int input_size, 
+                         unsigned char *output) {
+    int output_size = 0;
+    
+    for (int i = 0; i < input_size; i++) {
+        if (input[i] == FLAG) {
+            output[output_size++] = ESCAPE;
+            output[output_size++] = Escape_1;  
+        } else if (input[i] == ESCAPE) {
+            output[output_size++] = ESCAPE;
+            output[output_size++] = Escape_2;  
+        } else {
+            output[output_size++] = input[i];
+        }
+    }
+    
+    return output_size;
 }
