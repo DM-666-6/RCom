@@ -121,7 +121,7 @@ static int llopen_transmitter()
             case FLAG_RCV:
                 if (byte == FLAG)
                     state = FLAG_RCV;
-                else if (byte == A_RECEIVER)
+                else if (byte == A_TRANSMITTER)
                     state = A_RCV;
                 else
                     state = START;
@@ -139,7 +139,7 @@ static int llopen_transmitter()
             case C_RCV:
                 if (byte == FLAG)
                     state = FLAG_RCV;
-                else if (byte == (A_RECEIVER ^ C_UA))
+                else if (byte == (A_TRANSMITTER ^ C_UA))
                     state = BCC_OK;
                 else
                     state = START;
@@ -266,9 +266,9 @@ static int llopen_receiver()
     // Send UA response
     unsigned char ua_frame[5] = {
         FLAG,
-        A_RECEIVER,
+        A_TRANSMITTER,
         C_UA,
-        A_RECEIVER ^ C_UA,
+        A_TRANSMITTER ^ C_UA,
         FLAG
     };
 
@@ -399,7 +399,7 @@ static int llclose_transmitter()
                     break;
                 case C_RCV:
                     if (byte == FLAG) state = FLAG_RCV;
-                    else if (byte == (A_RECEIVER ^ C_DISC)) state = BCC_OK; 
+                    else if (byte == (A_TRANSMITTER ^ C_DISC)) state = BCC_OK; 
                     else state = START;
                     break;
                 case BCC_OK:
@@ -419,9 +419,9 @@ static int llclose_transmitter()
         if (valid_disc_response) {
             unsigned char ua_frame[5] = {
                 FLAG,
-                A_TRANSMITTER,      
+                A_RECEIVER,      
                 C_UA,               
-                A_TRANSMITTER ^ C_UA, 
+                A_RECEIVER ^ C_UA, 
                 FLAG
             };
             
@@ -497,7 +497,7 @@ static int llclose_receiver()
         FLAG,
         A_TRANSMITTER,        
         C_DISC,            
-        A_RECEIVER ^ C_DISC, 
+        A_TRANSMITTER ^ C_DISC, 
         FLAG
     };
 
