@@ -325,13 +325,7 @@ int llclose()
     int result = 0;
     
     if (current_role == LlTx) {
-         if (setup_alarm_handler() < 0)
-        {
-            closeSerialPort();
-            return -1;
-        }
-        
-        result = llclose_transmitter();
+       result = llclose_transmitter();
     } else {
         result = llclose_receiver();
     }
