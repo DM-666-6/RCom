@@ -14,6 +14,11 @@
 #define FILE_SIZE_TYPE 0x00
 #define FILE_NAME_TYPE 0x01
 
+unsigned char* createControlPacket(int type, const char* filename, long int file_size, int* packet_size);
+unsigned char* createDataPacket(const unsigned char* data, int data_size, int* packet_size);
+void parseControlPacket(unsigned char* packet, int packet_size, char* filename, long int* file_size);
+unsigned char* parseDataPacket(unsigned char* packet, int packet_size, int* data_size);
+
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
 {
@@ -29,9 +34,8 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
     link_layer.nRetransmissions=nTries;
     link_layer.timeout=timeout;
 
-    int file_descriptor=llopen(link_layer);
-      if (file_descriptor < 0) {
-        printf("Couldn't create file descriptor\n");
+    if (llopen(link_layer) < 0) {
+        printf("Couldn't establish connection\n");
         exit(-1);
     }
 
@@ -47,10 +51,10 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             long int file_size = ftell(file);
             rewind(file);
 
-            unsigned int ctrl_packet_size;
+            int ctrl_packet_size;
             unsigned char* ctrl_start = createControlPacket(START_PACKET,filename,file_size,&ctrl_packet_size);
 
-            if(llwrite(file_descriptor, ctrl_start, ctrl_packet_size) == -1){ 
+            if(llwrite(ctrl_start, ctrl_packet_size) == -1){ 
                 printf("error in start packet\n");
                 free(ctrl_start);
                 fclose(file);
@@ -65,7 +69,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 int data_packet_size;
                 unsigned char* data_packet = createDataPacket(buffer, bytes_read, &data_packet_size);
                 
-                if (llwrite(file_descriptor, data_packet, data_packet_size) == -1) {
+                if (llwrite(data_packet, data_packet_size) == -1) {
                     printf("error in data packet\n");
                     free(data_packet);
                     fclose(file);
@@ -77,7 +81,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
             unsigned char* ctrl_end = createControlPacket(END_PACKET,filename,file_size,&ctrl_packet_size);
 
-            if(llwrite(file_descriptor, ctrl_end, ctrl_packet_size) == -1){ 
+            if(llwrite(ctrl_end, ctrl_packet_size) == -1){ 
                 printf("error in end packet\n");
                 free(ctrl_end);
                 fclose(file);
@@ -96,7 +100,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
             long int expected_file_size = 0;
             char output_filename[256];
 
-            while ((packet_size = llread(file_descriptor, packet)) < 0);
+            while ((packet_size = llread(packet)) < 0);
 
             if (packet[0] != START_PACKET) {
                 printf("Not START packet\n");
@@ -113,7 +117,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
             long int total_received=0;
             while (total_received < expected_file_size ){
-                packet_size=llread(file_descriptor,packet);
+                packet_size=llread(packet);
                 if (packet_size < 0) continue;
 
                 if (packet[0] == DATA_PACKET){
