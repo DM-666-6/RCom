@@ -59,6 +59,7 @@ static int llclose_receiver();
 static unsigned char calculate_bcc2(const unsigned char *data, int data_size);
 static int send_information_frame(const unsigned char *data, int data_size);
 static void process_supervision_frame(unsigned char address, unsigned char control_field);
+static int byte_destuffing(const unsigned char *input, int input_size, unsigned char *output);
 
 
 // Alarm handler function
@@ -429,7 +430,139 @@ int llwrite(const unsigned char *buf, int bufSize)
 ////////////////////////////////////////////////
 int llread(unsigned char *packet)
 {
-    return 0;
+    if (current_role != LlRx) {
+        return -1; 
+    }
+    
+    if (packet == NULL) {
+        return -1;
+    }
+    
+    static bool expected_ns = FALSE; 
+    State state = START;
+    unsigned char byte;
+    unsigned char address = 0, control = 0;
+    unsigned char stuffed_data[(MAX_PAYLOAD_SIZE+4)*2]; 
+    int stuffed_index = 0;
+    unsigned char destuffed_data[MAX_PAYLOAD_SIZE+4];
+    int data_size = 0;
+    
+    while (1) {
+        int res = readByteSerialPort(&byte);
+        if (res < 1) continue;
+        
+        switch (state) {
+            case START:
+                if (byte == FLAG) {
+                    state = FLAG_RCV;
+                    address = 0;
+                    control = 0;
+                    stuffed_index = 0;
+                }
+                break;
+                
+            case FLAG_RCV:
+                if (byte == FLAG) {
+                } else if (byte == A_TRANSMITTER) {
+                    address = byte;
+                    state = A_RCV;
+                } else {
+                    state = START;
+                }
+                break;
+                
+            case A_RCV:
+                if (byte == FLAG) {
+                    state = FLAG_RCV;
+                } else if (byte == C_I0 || byte == C_I1) {
+                    control = byte;
+                    state = C_RCV;
+                } else {
+                    state = START;
+                }
+                break;
+                
+            case C_RCV:
+                if (byte == FLAG) {
+                    state = FLAG_RCV;
+                } else if (byte == (address ^ control)) {
+                    state = BCC_OK;
+                } else {
+                    state = START;
+                }
+                break;
+                
+            case BCC_OK:
+                if (byte == FLAG) {
+                    int destuffed_size = byte_destuffing(stuffed_data, stuffed_index, destuffed_data);
+                    
+                    if (destuffed_size >= 1) { 
+                        unsigned char received_bcc2 = destuffed_data[destuffed_size - 1];
+                        unsigned char calculated_bcc2 = calculate_bcc2(destuffed_data, destuffed_size - 1);
+                        
+                        if (received_bcc2 == calculated_bcc2) {
+                            bool received_ns = (control == C_I1) ? TRUE : FALSE;
+                            
+                            if (received_ns == expected_ns) {
+                                data_size = destuffed_size - 1; 
+                                memcpy(packet, destuffed_data, data_size);
+                                expected_ns = !expected_ns; 
+                                
+                                
+                                unsigned char rr_control = expected_ns ? C_RR1 : C_RR0;
+                                unsigned char rr_frame[5] = {
+                                    FLAG,
+                                    A_TRANSMITTER,
+                                    rr_control,
+                                    A_TRANSMITTER ^ rr_control,
+                                    FLAG
+                                };
+                                writeBytesSerialPort(rr_frame, 5);
+                                
+                                return data_size;
+                            } else {
+                                unsigned char rr_control = expected_ns ? C_RR1 : C_RR0;
+                                unsigned char rr_frame[5] = {
+                                    FLAG,
+                                    A_TRANSMITTER,
+                                    rr_control,
+                                    A_TRANSMITTER ^ rr_control,
+                                    FLAG
+                                };
+                                writeBytesSerialPort(rr_frame, 5);
+                                state = START;
+                                continue; 
+                            }
+                        } else {
+                            unsigned char rej_control = expected_ns ? C_REJ1 : C_REJ0;
+                            unsigned char rej_frame[5] = {
+                                FLAG,
+                                A_TRANSMITTER,
+                                rej_control,
+                                A_TRANSMITTER ^ rej_control,
+                                FLAG
+                            };
+                            writeBytesSerialPort(rej_frame, 5);
+                            state = START;
+                        }
+                    } else {
+                        state = START;
+                    }
+                } else {
+                    if (stuffed_index < 1024) {
+                        stuffed_data[stuffed_index++] = byte;
+                    } else {
+                        state = START;
+                    }
+                }
+                break;
+                
+            default:
+                state = START;
+        }
+    }
+    
+    return -1; 
 }
 
 ////////////////////////////////////////////////
@@ -728,4 +861,32 @@ static void process_supervision_frame(unsigned char address, unsigned char contr
     }
 }
 
+static int byte_destuffing(const unsigned char *input, int input_size, 
+                          unsigned char *output) {
+    int output_size = 0;
+    bool escape_next = FALSE;
+    
+    for (int i = 0; i < input_size; i++) {
+        if (escape_next) {
+            if (input[i] == Escape_1) {
+                output[output_size++] = FLAG;
+            } else if (input[i] == Escape_2) {
+                output[output_size++] = ESCAPE;
+            } else {
+                return -1;
+            }
+            escape_next = FALSE;
+        } else if (input[i] == ESCAPE) {
+            escape_next = TRUE;
+        } else {
+            output[output_size++] = input[i];
+        }
+    }
+    
+    if (escape_next) {
+        return -1;
+    }
+    
+    return output_size;
+}
 
