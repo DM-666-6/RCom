@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdbool.h>
 
 // MISC
 #define _POSIX_SOURCE 1 // POSIX compliant source
@@ -56,6 +57,9 @@ static int llopen_receiver();
 static int llclose_transmitter();
 static int llclose_receiver();
 static unsigned char calculate_bcc2(const unsigned char *data, int data_size);
+static int send_information_frame(const unsigned char *data, int data_size);
+static void process_supervision_frame(unsigned char address, unsigned char control_field);
+
 
 // Alarm handler function
 static void alarmHandler(int signal)
@@ -319,9 +323,107 @@ int llopen(LinkLayer connectionParameters)
 ////////////////////////////////////////////////
 int llwrite(const unsigned char *buf, int bufSize)
 {
-    return 0;
+    if (current_role != LlTx) {
+        return -1; 
+    }
+    
+    if (buf == NULL || bufSize <= 0) {
+        return -1;
+    }
+    
+    alarmCount = 0;
+    STOP = FALSE;
+    
+    while (alarmCount < current_retransmissions && !STOP) {
+        int bytes_sent = send_information_frame(buf, bufSize);
+        if (bytes_sent <= 0) {
+            return -1;
+        }
+        
+        State state = START;
+        unsigned char byte;
+        unsigned char address = 0, control = 0;
+        
+        ack_received = FALSE;
+        reject_received = FALSE;
+        
+        alarm(current_timeout);
+        alarmEnabled = TRUE;
+        
+        while (alarmEnabled && !ack_received && !reject_received) {
+            int res = readByteSerialPort(&byte);
+            if (res < 1) continue;
+            
+            switch (state) {
+                case START:
+                    if (byte == FLAG) {
+                        state = FLAG_RCV;
+                        address = 0;
+                        control = 0;
+                    }
+                    break;
+                    
+                case FLAG_RCV:
+                    if (byte == FLAG) {
+                    } else if (byte == A_TRANSMITTER) {
+                        address = byte;
+                        state = A_RCV;
+                    } else {
+                        state = START;
+                    }
+                    break;
+                    
+                case A_RCV:
+                    if (byte == FLAG) {
+                        state = FLAG_RCV;
+                    } else if (byte==C_REJ0 || byte==C_REJ1 || byte==C_RR0 || byte==C_RR1) {
+                        control = byte;
+                        state = C_RCV;
+                    }else{
+                        state=START;
+                    }
+                    break;
+                    
+                case C_RCV:
+                    if (byte == FLAG) {
+                        state = FLAG_RCV;
+                    } else if (byte == (address ^ control)) {
+                        state = BCC_OK;
+                    } else {
+                        state = START;
+                    }
+                    break;
+                    
+                case BCC_OK:
+                    if (byte == FLAG) {
+                        process_supervision_frame(address, control);
+                        state = STOP_STATE;
+                    } else {
+                        state = START;
+                    }
+                    break;
+                    
+                default:
+                    state = START;
+            }
+        }
+        
+        if (alarmEnabled) {
+            alarm(0);
+            alarmEnabled = FALSE;
+        }
+        
+        if (ack_received) {
+            return bufSize;
+        } 
+    }
+    
+    if (alarmCount >= current_retransmissions) {
+        return -1; 
+    }
+    
+    return bufSize;
 }
-
 ////////////////////////////////////////////////
 // LLREAD
 ////////////////////////////////////////////////
@@ -444,7 +546,6 @@ static int llclose_receiver()
     unsigned char byte;
     int valid_disc = FALSE;
 
-    // Receiver waits indefinitely for DISC frame (no timeout)
     while (!valid_disc) {
         int res = readByteSerialPort(&byte);
         if (res < 1) continue;
@@ -560,3 +661,71 @@ static int byte_stuffing(const unsigned char *input, int input_size,
     
     return output_size;
 }
+
+static int send_information_frame(const unsigned char *data, int data_size) {
+    unsigned char control_field = (ns) ? C_I1 : C_I0;
+    
+    unsigned char bcc1 = A_TRANSMITTER ^ control_field;
+    
+    unsigned char bcc2 = calculate_bcc2(data, data_size);
+ 
+    int unstuffed_data_size = 3 + data_size + 1;
+    unsigned char unstuffed_data[unstuffed_data_size];
+    
+    unstuffed_data[0] = A_TRANSMITTER;
+    unstuffed_data[1] = control_field;
+    unstuffed_data[2] = bcc1;
+    
+    memcpy(&unstuffed_data[3], data, data_size);
+    
+    unstuffed_data[3 + data_size] = bcc2;
+    
+    unsigned char stuffed_data[unstuffed_data_size * 2]; 
+    int stuffed_data_size = byte_stuffing(unstuffed_data, unstuffed_data_size, stuffed_data);
+    
+    unsigned char final_frame[stuffed_data_size + 2];
+    final_frame[0] = FLAG;
+    memcpy(&final_frame[1], stuffed_data, stuffed_data_size);
+    final_frame[stuffed_data_size + 1] = FLAG;
+    
+    int bytes_sent = writeBytesSerialPort(final_frame, stuffed_data_size + 2);
+    if (bytes_sent < 0) {
+        return -1;
+    }
+    return bytes_sent;
+}
+
+static void process_supervision_frame(unsigned char address, unsigned char control_field) {
+    if (address != A_TRANSMITTER) {
+        return;
+    }
+    
+    bool expected_nr = (ns) ? FALSE : TRUE; 
+    
+    switch (control_field) {
+        case C_RR0:  
+            if (expected_nr == FALSE) { 
+                ack_received = TRUE;
+                ns = !ns; 
+            }
+            break;
+        case C_RR1:  
+            if (expected_nr == TRUE) {
+                ack_received = TRUE;
+                ns = !ns; 
+            }
+            break;
+        case C_REJ0: 
+            if (expected_nr == FALSE) {
+                reject_received = TRUE;
+            }
+            break;
+        case C_REJ1: 
+            if (expected_nr == TRUE) {
+                reject_received = TRUE;
+            }
+            break;
+    }
+}
+
+
