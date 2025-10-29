@@ -22,9 +22,11 @@ unsigned char* parseDataPacket(unsigned char* packet, int packet_size, int* data
 void applicationLayer(const char *serialPort, const char *role, int baudRate,
                       int nTries, int timeout, const char *filename)
 {
+    setvbuf(stdout, NULL, _IONBF, 0);
+
     LinkLayer link_layer;
     strcpy(link_layer.serialPort, serialPort);
-    if (strcmp(role, "transmitter") == 0){
+    if (strcmp(role, "tx") == 0){
         link_layer.role =LlTx;
     }
     else{
@@ -47,9 +49,13 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 exit(-1);
             }
 
+            printf ("File opened ready to be read %s\n",filename);
+
             fseek(file, 0L, SEEK_END);
             long int file_size = ftell(file);
             rewind(file);
+
+            printf ("file size: %ld\n",file_size);
 
             int ctrl_packet_size;
             unsigned char* ctrl_start = createControlPacket(START_PACKET,filename,file_size,&ctrl_packet_size);
@@ -60,24 +66,35 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 fclose(file);
                 exit(-1);
             }
+            else{printf("Start packet sent\n");}
             free(ctrl_start);
+
+            if (file_size==0) break;
 
             unsigned char buffer[MAX_PAYLOAD_SIZE];
             size_t bytes_read;
 
+            printf("DEBUG: ftell before loop = %ld\n", ftell(file));
+
             while ((bytes_read = fread(buffer, 1, MAX_PAYLOAD_SIZE, file)) > 0) {
+                printf("read file\n");
                 int data_packet_size;
                 unsigned char* data_packet = createDataPacket(buffer, bytes_read, &data_packet_size);
+                printf("data packet size: %d\n",data_packet_size);
                 
                 if (llwrite(data_packet, data_packet_size) == -1) {
                     printf("error in data packet\n");
                     free(data_packet);
                     fclose(file);
                     exit(-1);
+                }else{
+                    printf("Data packet written successfuly\n");
                 }
                 
                 free(data_packet);
         }
+
+            printf("DEBUG: ftell after loop = %ld\n", ftell(file));
 
             unsigned char* ctrl_end = createControlPacket(END_PACKET,filename,file_size,&ctrl_packet_size);
 
@@ -88,32 +105,43 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                 exit(-1);
             }
             free(ctrl_end);
+            printf("End packet sent\n");
 
             fclose(file);
             break;
         }
 
         case LlRx:{
-            unsigned char packet[MAX_PAYLOAD_SIZE];
+            unsigned char packet[MAX_PAYLOAD_SIZE+100];
             int packet_size;
             FILE* output_file = NULL;
             long int expected_file_size = 0;
             char output_filename[256];
 
+            printf ("reading packet\n");
             while ((packet_size = llread(packet)) < 0);
+            printf ("Pakcet read\n");
 
             if (packet[0] != START_PACKET) {
                 printf("Not START packet\n");
                 break;
             }
 
+            printf("%ld\n",expected_file_size);
+
             parseControlPacket(packet,packet_size,output_filename,&expected_file_size);
 
-            output_file = fopen(output_filename, "wb");
-            if (output_file == NULL) {
-                printf("Error creating output file: %s\n", output_filename);
+            if (expected_file_size==0){
+                printf("File can't have 0 length\n");
                 break;
             }
+
+            output_file = fopen(filename, "wb");
+            if (output_file == NULL) {
+                printf("Error creating output file: %s\n", filename);
+                break;
+            }
+            printf ("File opened ready to be written %s\n",filename);
 
             long int total_received=0;
             while (total_received < expected_file_size ){
@@ -126,16 +154,17 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
                     fwrite(file_data, 1, data_size, output_file);
                     free(file_data);
                     total_received += data_size;
+                    printf("Data packet received,ready for another one\n");
                 }
 
-                if (packet[0] == END_PACKET){
-                    printf("Received END Packet\n");
-                    break;
-                }
+                
             }
-
+            packet_size=llread(packet);
+            if (packet[0] == END_PACKET){
+                    printf("Received END Packet\n");
+                }
             fclose(output_file);
-            printf("File transfer complete\n");
+            printf("File transfer complete %ld %ld \n",total_received,expected_file_size);
             break;
         }
         default:
@@ -163,7 +192,7 @@ unsigned char* createControlPacket(int type, const char* filename, long int file
     
     // File size parameter (TLV)
     packet[position++] = FILE_SIZE_TYPE;  
-    packet[position++] = 0x04;            // L = 4 bytes should be enough for this lab
+    packet[position++] = 0x04;            // L = 4 bytes (up to 4GB)
     
     packet[position++] = (file_size >> 24) & 0xFF;  //msb
     packet[position++] = (file_size >> 16) & 0xFF;
