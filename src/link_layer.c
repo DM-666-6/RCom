@@ -62,220 +62,8 @@ static void process_supervision_frame(unsigned char address, unsigned char contr
 static int byte_destuffing(const unsigned char *input, int input_size, unsigned char *output);
 
 
-// Alarm handler function
-static void alarmHandler(int signal)
-{
-    alarmEnabled = FALSE;
-    alarmCount++;
-}
 
-/**
- * Configure alarm signal handling
- */
-static int setup_alarm_handler()
-{
-    if (signal(SIGALRM, alarmHandler) == SIG_ERR)
-    {
-        perror("signal");
-        return -1;
-    }
-    return 0;
-}
 
-/**
- * Handles connection establishment for transmitter role
- */
-static int llopen_transmitter()
-{
-    // Build SET frame: FLAG | A | C | BCC | FLAG
-    unsigned char set_frame[5] = {
-        FLAG,
-        A_TRANSMITTER,  // Address field for transmitter
-        C_SET,          // Control field for SET
-        A_TRANSMITTER ^ C_SET,  // BCC
-        FLAG
-    };
-
-    STOP = FALSE;
-    alarmCount = 0;
-
-    while (alarmCount < current_retransmissions && !STOP)
-    {
-        // Send SET frame
-        int bytes_written = writeBytesSerialPort(set_frame, 5);
-        if (bytes_written < 5)
-        {
-            return -1;
-        }
-
-        // Set alarm for timeout
-        alarm(current_timeout);
-        alarmEnabled = TRUE;
-
-        // Wait for UA response
-        State state = START;
-        unsigned char byte;
-        int valid_ua = FALSE;
-
-        while (alarmEnabled && !STOP && !valid_ua)
-        {
-            int res = readByteSerialPort(&byte);
-            if (res < 1)
-                continue;
-
-            switch (state)
-            {
-            case START:
-                if (byte == FLAG)
-                    state = FLAG_RCV;
-                break;
-
-            case FLAG_RCV:
-                if (byte == FLAG)
-                    state = FLAG_RCV;
-                else if (byte == A_TRANSMITTER)
-                    state = A_RCV;
-                else
-                    state = START;
-                break;
-
-            case A_RCV:
-                if (byte == FLAG)
-                    state = FLAG_RCV;
-                else if (byte == C_UA)
-                    state = C_RCV;
-                else
-                    state = START;
-                break;
-
-            case C_RCV:
-                if (byte == FLAG)
-                    state = FLAG_RCV;
-                else if (byte == (A_TRANSMITTER ^ C_UA))
-                    state = BCC_OK;
-                else
-                    state = START;
-                break;
-
-            case BCC_OK:
-                if (byte == FLAG)
-                {
-                    state = STOP_STATE;
-                    valid_ua = TRUE;
-                    STOP = TRUE;
-                    alarm(0);
-                    alarmEnabled = FALSE;
-                }
-                else
-                    state = START;
-                break;
-
-            default:
-                state = START;
-            }
-        }
-
-        if (valid_ua)
-        {
-            return 0;
-        }
-
-        if (alarmEnabled) {
-            alarm(0);
-            alarmEnabled = FALSE;
-        }
-    }
-
-    if (alarmCount >= current_retransmissions)
-    {
-        return -1;
-    }
-
-    return 0;
-}
-
-/**
- * Handles connection establishment for receiver role
- */
-static int llopen_receiver()
-{
-    State state = START;
-    unsigned char byte;
-    int valid_set = FALSE;
-
-    // Receiver waits indefinitely for SET frame (no timeout)
-    while (!valid_set)
-    {
-        int res = readByteSerialPort(&byte);
-        if (res < 1)
-            continue;
-
-        switch (state)
-        {
-        case START:
-            if (byte == FLAG)
-                state = FLAG_RCV;
-            break;
-
-        case FLAG_RCV:
-            if (byte == FLAG)
-                state = FLAG_RCV;
-            else if (byte == A_TRANSMITTER)
-                state = A_RCV;
-            else
-                state = START;
-            break;
-
-        case A_RCV:
-            if (byte == FLAG)
-                state = FLAG_RCV;
-            else if (byte == C_SET)
-                state = C_RCV;
-            else
-                state = START;
-            break;
-
-        case C_RCV:
-            if (byte == FLAG)
-                state = FLAG_RCV;
-            else if (byte == (A_TRANSMITTER ^ C_SET))
-                state = BCC_OK;
-            else
-                state = START;
-            break;
-
-        case BCC_OK:
-            if (byte == FLAG)
-            {
-                state = STOP_STATE;
-                valid_set = TRUE;
-            }
-            else
-                state = START;
-            break;
-
-        default:
-            state = START;
-        }
-    }
-
-    // Send UA response
-    unsigned char ua_frame[5] = {
-        FLAG,
-        A_TRANSMITTER,
-        C_UA,
-        A_TRANSMITTER ^ C_UA,
-        FLAG
-    };
-
-    int bytes_written = writeBytesSerialPort(ua_frame, 5);
-    if (bytes_written < 5)
-    {
-        return -1;
-    }
-
-    return 0;
-}
 
 ////////////////////////////////////////////////
 // LLOPEN
@@ -286,7 +74,7 @@ int llopen(LinkLayer connectionParameters)
     current_timeout = connectionParameters.timeout;          
     current_retransmissions = connectionParameters.nRetransmissions;
 
-    // Open and configure serial port
+    
     if (openSerialPort(connectionParameters.serialPort, connectionParameters.baudRate) < 0)
     {
         return -1;
@@ -454,6 +242,7 @@ int llread(unsigned char *packet)
         switch (state) {
             case START:
                 if (byte == FLAG) {
+                    printf("Received flag\n");
                     state = FLAG_RCV;
                     address = 0;
                     control = 0;
@@ -463,37 +252,48 @@ int llread(unsigned char *packet)
                 
             case FLAG_RCV:
                 if (byte == FLAG) {
+                    printf("Still flag\n");
                 } else if (byte == A_TRANSMITTER) {
+                    printf("Received address\n");
                     address = byte;
                     state = A_RCV;
                 } else {
                     state = START;
+                    printf("Going back to start\n");
                 }
                 break;
                 
             case A_RCV:
                 if (byte == FLAG) {
                     state = FLAG_RCV;
+                    printf("Going back to flag\n");
                 } else if (byte == C_I0 || byte == C_I1) {
+                    printf("Received control\n");
                     control = byte;
                     state = C_RCV;
                 } else {
                     state = START;
+                    printf("Going back to start\n");
                 }
                 break;
                 
             case C_RCV:
                 if (byte == FLAG) {
+                    printf("Going back to flag\n");
                     state = FLAG_RCV;
                 } else if (byte == (address ^ control)) {
+                    printf("Received BCC\n");
                     state = BCC_OK;
+                    
                 } else {
                     state = START;
+                    printf("Going back to start\n");
                 }
                 break;
                 
             case BCC_OK:
                 if (byte == FLAG) {
+                    printf("Received flag\n");
                     int destuffed_size = byte_destuffing(stuffed_data, stuffed_index, destuffed_data);
                     
                     if (destuffed_size >= 1) { 
@@ -501,9 +301,11 @@ int llread(unsigned char *packet)
                         unsigned char calculated_bcc2 = calculate_bcc2(destuffed_data, destuffed_size - 1);
                         
                         if (received_bcc2 == calculated_bcc2) {
+                            printf("bbc2 was correct\n");
                             bool received_ns = (control == C_I1) ? TRUE : FALSE;
                             
                             if (received_ns == expected_ns) {
+                                printf("ns match\n");
                                 data_size = destuffed_size - 1; 
                                 memcpy(packet, destuffed_data, data_size);
                                 expected_ns = !expected_ns; 
@@ -521,6 +323,7 @@ int llread(unsigned char *packet)
                                 
                                 return data_size;
                             } else {
+                                printf("ns don't match\n");
                                 unsigned char rr_control = expected_ns ? C_RR1 : C_RR0;
                                 unsigned char rr_frame[5] = {
                                     FLAG,
@@ -534,6 +337,7 @@ int llread(unsigned char *packet)
                                 continue; 
                             }
                         } else {
+                            printf("Incorrect bcc2\n");
                             unsigned char rej_control = expected_ns ? C_REJ1 : C_REJ0;
                             unsigned char rej_frame[5] = {
                                 FLAG,
@@ -547,12 +351,14 @@ int llread(unsigned char *packet)
                         }
                     } else {
                         state = START;
+                        printf("Going back to start 1\n");
                     }
                 } else {
-                    if (stuffed_index < 1024) {
+                    if (stuffed_index < (MAX_PAYLOAD_SIZE+4)*2) {
                         stuffed_data[stuffed_index++] = byte;
                     } else {
                         state = START;
+                        printf("Going back to start 2\n");
                     }
                 }
                 break;
@@ -599,6 +405,7 @@ static int llclose_transmitter()
     STOP = FALSE;
 
     while (alarmCount < current_retransmissions && !STOP) {
+        printf ("Sending DISC as the transmitter\n");
         int bytes_written = writeBytesSerialPort(disc_frame, 5);
         if (bytes_written < 5) {
             return -1;
@@ -657,11 +464,13 @@ static int llclose_transmitter()
                 FLAG
             };
             
+            printf ("Disc from the receiver received, sending UA\n");
             int ua_written = writeBytesSerialPort(ua_frame, 5);
             if (ua_written < 5) {
                 return -1;
             }
-            return 0;  
+            return 0; 
+             
         }
 
         if (alarmEnabled) {
@@ -721,6 +530,7 @@ static int llclose_receiver()
         FLAG
     };
 
+    printf ("Received DISC from the transmitter, sending DISC\n");
     int bytes_written = writeBytesSerialPort(disc_response, 5);
     if (bytes_written < 5) {
         return -1;
@@ -762,6 +572,8 @@ static int llclose_receiver()
                 state = START;
         }
     }
+
+    printf ("Valid UA received, ready to shut execution\n");
 
     return 0;
 }
@@ -890,3 +702,206 @@ static int byte_destuffing(const unsigned char *input, int input_size,
     return output_size;
 }
 
+static void alarmHandler(int signal)
+{
+    alarmEnabled = FALSE;
+    alarmCount++;
+}
+
+static int setup_alarm_handler()
+{
+    struct sigaction act = {0};
+    act.sa_handler = &alarmHandler;
+    if (sigaction(SIGALRM, &act, NULL) == -1)
+    {
+        perror("sigaction");
+        exit(1);
+    }
+    return 0;
+}
+
+static int llopen_transmitter()
+{
+    unsigned char set_frame[5] = {
+        FLAG,
+        A_TRANSMITTER,  
+        C_SET,          
+        A_TRANSMITTER ^ C_SET,  
+        FLAG
+    };
+
+    STOP = FALSE;
+    alarmCount = 0;
+
+    while (alarmCount < current_retransmissions && !STOP)
+    {
+        printf ("Sending SET\n");
+        int bytes_written = writeBytesSerialPort(set_frame, 5);
+        if (bytes_written < 5)
+        {
+            return -1;
+        }
+
+        alarm(current_timeout);
+        alarmEnabled = TRUE;
+
+        State state = START;
+        unsigned char byte;
+        int valid_ua = FALSE;
+
+        while (alarmEnabled && !STOP && !valid_ua)
+        {
+            int res = readByteSerialPort(&byte);
+            if (res < 1)
+                continue;
+
+            switch (state)
+            {
+            case START:
+                if (byte == FLAG)
+                    state = FLAG_RCV;
+                break;
+
+            case FLAG_RCV:
+                if (byte == FLAG)
+                    state = FLAG_RCV;
+                else if (byte == A_TRANSMITTER)
+                    state = A_RCV;
+                else
+                    state = START;
+                break;
+
+            case A_RCV:
+                if (byte == FLAG)
+                    state = FLAG_RCV;
+                else if (byte == C_UA)
+                    state = C_RCV;
+                else
+                    state = START;
+                break;
+
+            case C_RCV:
+                if (byte == FLAG)
+                    state = FLAG_RCV;
+                else if (byte == (A_TRANSMITTER ^ C_UA))
+                    state = BCC_OK;
+                else
+                    state = START;
+                break;
+
+            case BCC_OK:
+                if (byte == FLAG)
+                {
+                    state = STOP_STATE;
+                    valid_ua = TRUE;
+                    STOP = TRUE;
+                    alarm(0);
+                    alarmEnabled = FALSE;
+                }
+                else
+                    state = START;
+                break;
+
+            default:
+                state = START;
+            }
+        }
+
+        if (valid_ua)
+        {
+            printf ("valid UA response from the receiver\n");
+            return 0;
+        }
+
+        if (alarmEnabled) {
+            alarm(0);
+            alarmEnabled = FALSE;
+        }
+    }
+
+    if (alarmCount >= current_retransmissions)
+    {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int llopen_receiver()
+{
+    State state = START;
+    unsigned char byte;
+    int valid_set = FALSE;
+
+    while (!valid_set)
+    {
+        int res = readByteSerialPort(&byte);
+        if (res < 1)
+            continue;
+
+        switch (state)
+        {
+        case START:
+            if (byte == FLAG)
+                state = FLAG_RCV;
+            break;
+
+        case FLAG_RCV:
+            if (byte == FLAG)
+                state = FLAG_RCV;
+            else if (byte == A_TRANSMITTER)
+                state = A_RCV;
+            else
+                state = START;
+            break;
+
+        case A_RCV:
+            if (byte == FLAG)
+                state = FLAG_RCV;
+            else if (byte == C_SET)
+                state = C_RCV;
+            else
+                state = START;
+            break;
+
+        case C_RCV:
+            if (byte == FLAG)
+                state = FLAG_RCV;
+            else if (byte == (A_TRANSMITTER ^ C_SET))
+                state = BCC_OK;
+            else
+                state = START;
+            break;
+
+        case BCC_OK:
+            if (byte == FLAG)
+            {
+                state = STOP_STATE;
+                valid_set = TRUE;
+            }
+            else
+                state = START;
+            break;
+
+        default:
+            state = START;
+        }
+    }
+
+    unsigned char ua_frame[5] = {
+        FLAG,
+        A_TRANSMITTER,
+        C_UA,
+        A_TRANSMITTER ^ C_UA,
+        FLAG
+    };
+
+    printf ("Valid SET, sending UA\n");
+    int bytes_written = writeBytesSerialPort(ua_frame, 5);
+    if (bytes_written < 5)
+    {
+        return -1;
+    }
+
+    return 0;
+}
