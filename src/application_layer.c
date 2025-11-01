@@ -120,7 +120,7 @@ void applicationLayer(const char *serialPort, const char *role, int baudRate,
 
             printf ("reading packet\n");
             while ((packet_size = llread(packet)) < 0);
-            printf ("Pakcet read\n");
+            printf ("Packet read\n");
 
             if (packet[0] != START_PACKET) {
                 printf("Not START packet\n");
