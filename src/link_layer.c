@@ -370,9 +370,9 @@ int llclose()
     return result;
 }
 
-// ===============================================================
-// Simplified Connection Management Functions
-// ===============================================================
+
+
+
 
 static int llopen_transmitter()
 {
